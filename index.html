@@ -1,10 +1,12 @@
-<script src="coi-serviceworker.js"></script>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>筋トレWebアプリ - 最終完成版</title>
+    <title>筋トレWebアプリ - スマホ安定版</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script src="coi-serviceworker.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; margin: 0; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
         .app-container { width: 375px; height: 667px; background: white; border-radius: 12px; position: relative; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
@@ -15,24 +17,18 @@
         .wasm-area { background: #fffaf0; border: 1px solid #ffe0b2; padding: 15px; border-radius: 8px; margin-top: 10px; }
         .range-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 8px; font-size: 0.8em; align-items: center; }
         input[type="number"], select, input[type="text"] { padding: 6px; border-radius: 4px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; }
-        button { cursor: pointer; border: none; border-radius: 6px; padding: 10px; font-weight: bold; transition: 0.2s; }
+        button { cursor: pointer; border: none; border-radius: 6px; padding: 10px; font-weight: bold; }
         .primary-btn { background: #e91e63; color: white; width: 100%; }
         .secondary-btn { background: #00bcd4; color: white; flex: 1; }
         #dashboard { display: flex; justify-content: space-around; background: #fafafa; padding: 10px; border-radius: 8px; border: 1px solid #eee; margin-bottom: 15px; text-align: center; }
         .dash-item span { display: block; font-size: 0.7em; color: #777; }
         .dash-item b { font-size: 0.9em; color: #333; }
-        
-        /* カレンダー */
         #calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
         .cal-weekday { font-size: 0.7em; font-weight: bold; color: #777; padding: 5px 0; text-align: center; }
         .cal-day { padding: 8px 0; background: #f5f5f5; border-radius: 4px; font-size: 0.8em; cursor: pointer; text-align: center; border: 2px solid transparent; min-height: 40px; }
         .cal-empty { background: transparent; }
-
-        /* 削除ボタン付きの記録リスト */
         .record-item { display: flex; justify-content: space-between; align-items: center; background: #f9f9f9; padding: 5px 8px; margin-bottom: 4px; border-radius: 4px; font-size: 0.9em; }
         .delete-btn { background: #ff5252; color: white; padding: 2px 6px; font-size: 0.7em; border-radius: 3px; }
-
-        /* モーダル */
         #record-modal { display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1000; justify-content:center; align-items:center; }
         .modal-content { background:white; width:90%; padding:20px; border-radius:10px; }
     </style>
@@ -51,8 +47,8 @@
             <button class="secondary-btn" onclick="showScreen('screen5')" style="background:#4caf50;">タイマー</button>
         </div>
         <div class="wasm-area">
-            <h4>献立検索 Wasm 実験 (100万件)</h4>
-            <select id="thread-select" style="margin-bottom:10px;">
+            <h4>献立検索 Wasm 実験</h4>
+            <select id="thread-select" style="margin-bottom:10px;" onchange="clearWasmInstance()">
                 <option value="1">1 Thread</option><option value="2">2 Threads</option>
                 <option value="3">3 Threads</option><option value="4" selected>4 Threads</option>
             </select>
@@ -101,7 +97,7 @@
                 <span>身長 (cm)</span><input type="number" id="p-h" value="170">
                 <span>体重 (kg)</span><input type="number" id="p-w" value="65">
                 <span>年齢 (歳)</span><input type="number" id="p-a" value="25">
-                <span>身体活動レベル</span>
+                <span>活動レベル</span>
                 <select id="p-pal">
                     <option value="1.2">低（運動なし）</option>
                     <option value="1.55" selected>中（週1-3回運動）</option>
@@ -137,7 +133,8 @@
     let calendarDate = new Date();
     let selectedDateStr = "";
     let timerInterval = null;
-    let WasmModuleInstance = null;
+    let WasmModuleInstance = null; // 💡 グローバルで保持し、再利用する
+    let currentLoadedThreads = null;
 
     const TRAINING_CATALOG = {
         "胸": [{name:"プッシュアップ", kcal:0.5},{name:"ダンベルベンチプレス", kcal:0.6},{name:"インクラインベンチプレス", kcal:0.65},{name:"デクラインプッシュアップ", kcal:0.55}],
@@ -153,6 +150,15 @@
         document.getElementById(id).classList.add('active');
     }
 
+    // 💡 スレッド数が変更されたらWasmをクリアする
+    function clearWasmInstance() {
+        if (WasmModuleInstance && WasmModuleInstance.PThread) {
+            WasmModuleInstance.PThread.terminateAllThreads();
+        }
+        WasmModuleInstance = null;
+        currentLoadedThreads = null;
+    }
+
     function updateDashboard() {
         const prof = JSON.parse(localStorage.getItem('user_profile') || '{"bmr":0}');
         const details = JSON.parse(localStorage.getItem('training_details') || '{}');
@@ -165,6 +171,7 @@
         document.getElementById('dash-total-burned').textContent = Math.round(prof.bmr + exBurned) + " kcal";
     }
 
+    // --- カレンダー ---
     function openCalendar() { showScreen('screen2'); renderCalendar(); }
     function changeMonth(n) { calendarDate.setMonth(calendarDate.getMonth() + n); renderCalendar(); }
     function renderCalendar() {
@@ -190,71 +197,83 @@
     function openModal() { document.getElementById('modal-date-title').textContent = selectedDateStr; document.getElementById('record-modal').style.display='flex'; updateMenuOptions(); displayRecords(); }
     function closeModal() { document.getElementById('record-modal').style.display='none'; }
     function updateMenuOptions() { const cat = document.getElementById('category-select').value; document.getElementById('menu-select').innerHTML = TRAINING_CATALOG[cat].map(m => `<option value="${m.name}">${m.name}</option>`).join(''); }
-
-    // 💡 削除機能付きの記録表示
     function displayRecords() {
         const details = JSON.parse(localStorage.getItem('training_details') || '{}');
         const records = details[selectedDateStr] || [];
         const container = document.getElementById('record-list');
-        if (records.length === 0) {
-            container.innerHTML = "記録なし";
-        } else {
-            container.innerHTML = records.map((r, index) => `
-                <div class="record-item">
-                    <span>${r.menu} (${r.reps}回)</span>
-                    <button class="delete-btn" onclick="deleteTrainingRecord(${index})">削除</button>
-                </div>
-            `).join('');
-        }
+        container.innerHTML = records.length === 0 ? "記録なし" : records.map((r, i) => `
+            <div class="record-item"><span>${r.menu} (${r.reps}回)</span><button class="delete-btn" onclick="deleteTrainingRecord(${i})">削除</button></div>
+        `).join('');
     }
-
-    // 💡 特定のインデックスの記録を削除
-    function deleteTrainingRecord(index) {
-        let details = JSON.parse(localStorage.getItem('training_details') || '{}');
-        if (details[selectedDateStr]) {
-            details[selectedDateStr].splice(index, 1);
-            localStorage.setItem('training_details', JSON.stringify(details));
-            displayRecords();
-            renderCalendar();
-            updateDashboard();
-        }
-    }
-
+    function deleteTrainingRecord(i) { let d = JSON.parse(localStorage.getItem('training_details') || '{}'); if (d[selectedDateStr]) { d[selectedDateStr].splice(i, 1); localStorage.setItem('training_details', JSON.stringify(d)); displayRecords(); renderCalendar(); updateDashboard(); } }
     function addTrainingRecord() { const menu = document.getElementById('menu-select').value; const reps = parseInt(document.getElementById('input-reps').value); if(!reps) return; let d = JSON.parse(localStorage.getItem('training_details') || '{}'); if(!d[selectedDateStr]) d[selectedDateStr] = []; d[selectedDateStr].push({menu, reps}); localStorage.setItem('training_details', JSON.stringify(d)); displayRecords(); renderCalendar(); updateDashboard(); }
+
+    // --- Wasm 読み込み & 検索 ---
+    async function loadWasm(t) {
+        // 💡 既に指定スレッドのWasmがロード済みなら何もしない
+        if (WasmModuleInstance && currentLoadedThreads === t) return;
+        
+        // 別のスレッド数が選ばれた場合は古いスレッドを破棄
+        clearWasmInstance();
+
+        return new Promise(res => {
+            const s = document.createElement('script'); 
+            s.src = `diet_search_${t}t.js`; 
+            document.body.appendChild(s);
+            s.onload = () => Module().then(inst => { 
+                WasmModuleInstance = inst; 
+                currentLoadedThreads = t;
+                res(); 
+            });
+        });
+    }
 
     async function startDietSearch() {
         const t = document.getElementById('thread-select').value;
         window.foundResults = [];
         showScreen('screen_res'); document.getElementById('res-list').innerHTML = "計算中...";
-        const s = document.createElement('script'); s.src = `diet_search_${t}t.js`; document.body.appendChild(s);
-        s.onload = () => Module().then(inst => {
-            WasmModuleInstance = inst;
-            const search = inst.cwrap('perform_multi_thread_search','number',['number','number','number','number','number','number','number','number','number']);
-            const time = search(t, document.getElementById('min-cal').value, document.getElementById('max-cal').value, document.getElementById('min-p').value, document.getElementById('max-p').value, document.getElementById('min-c').value, document.getElementById('max-c').value, document.getElementById('min-f').value, document.getElementById('max-f').value);
-            inst._report_results_to_js();
-            let html = `<b>Time: ${time.toFixed(3)} ms</b><br>Hits: ${inst._get_found_menu_count_value()}<hr>`;
+        
+        // 💡 修正ポイント：Wasmの読み込みをチェック
+        await loadWasm(t);
+
+        try {
+            const search = WasmModuleInstance.cwrap('perform_multi_thread_search','number',['number','number','number','number','number','number','number','number','number']);
+            const time = search(t, 
+                document.getElementById('min-cal').value, document.getElementById('max-cal').value,
+                document.getElementById('min-p').value, document.getElementById('max-p').value,
+                document.getElementById('min-c').value, document.getElementById('max-c').value,
+                document.getElementById('min-f').value, document.getElementById('max-f').value
+            );
+            WasmModuleInstance._report_results_to_js();
+            
+            let html = `<b>Time: ${time.toFixed(3)} ms</b><br>Hits: ${WasmModuleInstance._get_found_menu_count_value()}<hr>`;
             window.foundResults.forEach(m => html += `<div>${m.name} (${m.cal}kcal)</div>`);
             document.getElementById('res-list').innerHTML = html;
-        });
+        } catch (e) {
+            console.error(e);
+            document.getElementById('res-list').innerHTML = "エラーが発生しました。リロードしてください。";
+        }
     }
 
+    // --- タイマー機能 ---
     function startTimer() {
         const w = parseInt(document.getElementById('w-sec').value), r = parseInt(document.getElementById('r-sec').value), total = parseInt(document.getElementById('s-count').value);
         let cur = 1, resting = false, left = w;
         showScreen('screen6');
         timerInterval = setInterval(() => { document.getElementById('t-clock').textContent = left; document.getElementById('t-sets').textContent = `Set: ${cur} / ${total}`; if(left-- <= 0) { if(!resting) { resting = true; left = r; document.getElementById('t-status').textContent="REST"; } else { resting = false; cur++; if(cur > total) finishTimer(total * w); else { left = w; document.getElementById('t-status').textContent="WORKOUT"; } } } }, 1000);
     }
-    function finishTimer(sec) { const burned = Math.round(sec * 0.15); const today = new Date().toISOString().split('T')[0]; let data = JSON.parse(localStorage.getItem('cal_data') || '{}'); data[today] = (data[today] || 0) + burned; localStorage.setItem('cal_data', JSON.stringify(data)); stopTimer(); }
+    function finishTimer(sec) { const burned = Math.round(sec * 0.15); const today = new Date().toISOString().split('T')[0]; let data = JSON.parse(localStorage.getItem('cal_data') || '{}'); data[today] = (data[today] || 0) + burned; localStorage.setItem('cal_data', JSON.stringify(data)); alert(`${burned} kcal 消費！`); stopTimer(); }
     function stopTimer() { clearInterval(timerInterval); updateDashboard(); showScreen('screen1'); }
 
+    // --- マイページ保存 ---
     function saveProfile() {
         const h = document.getElementById('p-h').value, w = document.getElementById('p-w').value, a = document.getElementById('p-a').value, pal = document.getElementById('p-pal').value;
         const bmr = (document.getElementById('p-gen').value === 'male') ? (13.4*w + 4.8*h - 5.7*a + 88) : (9.2*w + 3.1*h - 4.3*a + 447);
-        localStorage.setItem('user_profile', JSON.stringify({bmr})); updateDashboard(); alert("保存完了");
+        localStorage.setItem('user_profile', JSON.stringify({bmr}));
+        updateDashboard(); alert("保存しました");
     }
 
     window.onload = updateDashboard;
 </script>
 </body>
-
 </html>
