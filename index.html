@@ -268,7 +268,7 @@
     // --- マイページ保存 ---
     function saveProfile() {
         const h = document.getElementById('p-h').value, w = document.getElementById('p-w').value, a = document.getElementById('p-a').value, pal = document.getElementById('p-pal').value;
-        const bmr = (document.getElementById('p-gen').value === 'male') ? (13.4*w + 4.8*h - 5.7*a + 88) : (9.2*w + 3.1*h - 4.3*a + 447);
+        const bmr = (document.getElementById('p-gen').value === 'male') ? ((0.1238 + (0.0481*w)+(0.0234*h)-(0.0138*a)-0.5473)*1000/4.186) : ((0.1238 + (0.0481*w)+(0.0234*h)-(0.0138*a)-1.0946)*1000/4.186);
         localStorage.setItem('user_profile', JSON.stringify({bmr}));
         updateDashboard(); alert("保存しました");
     }
@@ -277,3 +277,4 @@
 </script>
 </body>
 </html>
+
